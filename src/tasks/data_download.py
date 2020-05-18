@@ -428,7 +428,7 @@ def download_reference_data(cfg):
         reference_file = reference_dir / reference_base_name
 
         if reference_file.is_file():
-            log.info(f'Reference data archive already exists.')
+            log.info('Reference data archive already exists.')
         else:
             log.info(f'Downloading reference data: {reference_file}')
             dl_time = time.time()
@@ -456,7 +456,7 @@ def download_reference_data(cfg):
             )
             log.info('Extraction competed.')
         except Exception as e:
-            log.error(f'Automatic extraction failed.')
+            log.error('Automatic extraction failed.')
             log.info(
                 f'Please try to extract data manually to: '
                 f'{reference_dir}'
@@ -513,7 +513,7 @@ def prepare_reference_data(cfg):
         log.info(f'Saving {data_file}')
         ref_data.to_file(data_file)
 
-    log.info(f'Reference data ready!')
+    log.info('Reference data ready!')
 
 
 @click.command()
