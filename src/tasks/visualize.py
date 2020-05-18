@@ -228,7 +228,7 @@ def plot_maps(cfg):
         return
 
     bands = config.get_band_names(cfg, DataSource.SENTINEL2_L1C)
-    # s2l1c_cfg = config.get_sh_input_config(cfg, DataSource.SENTINEL2_L1C)
+    s2l1c_cfg = config.get_sh_input_config(cfg, DataSource.SENTINEL2_L1C)
     ref_classes = [int(k) for k in ref_cfg['classes'].keys()]
     ref_labels = [props['label'] for props in vis_cfg['classes'].values()]
     ref_bounds = misc.get_bounds_from_values(ref_classes)
@@ -254,8 +254,8 @@ def plot_maps(cfg):
         # True color map
         if map_cfg['type'] == 'rgb':
             rgb_args = {
-                # 'feature': s2l1c_cfg['feature'],
-                'feature': 'FEATURES',
+                'feature': s2l1c_cfg['feature'],
+                # 'feature': 'FEATURES',
                 'bands': bands,
                 'date': map_cfg['date']
             }
