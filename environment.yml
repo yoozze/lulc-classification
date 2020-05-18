@@ -1,0 +1,22 @@
+name: lulc
+channels:
+    - conda-forge
+dependencies:
+    - python=3.7
+    - pip
+    - nb_conda
+    - ipyleaflet
+    - basemap
+    - flake8
+    - python-dotenv
+    - invoke
+    - patool
+    - scikit-multiflow
+    - eo-learn-core
+    - eo-learn-coregistration
+    - eo-learn-features
+    - eo-learn-geometry
+    - eo-learn-io
+    - eo-learn-mask
+    - eo-learn-ml-tools
+    - eo-learn-visualization[FULL]

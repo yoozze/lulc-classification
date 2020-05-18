@@ -1,0 +1,12 @@
+// Country: Slovenia
+// Type: LPIS
+// Time interval: 2017-2019
+{
+    "name": "LPIS - Slovenia",
+    "description": "LPIS modelling for entire Slovenia based on Sentinel 1 data from 2016 - 2019",
+    "AOI": {
+        "country": "SVN",
+        "crs": "UTM_33N",
+        "grid": [25, 17]
+    }
+}
