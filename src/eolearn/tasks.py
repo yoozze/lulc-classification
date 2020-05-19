@@ -60,6 +60,20 @@ class AddGradientTask(EOTask):
         return eopatch
 
 
+class CleanMeta(EOTask):
+    """The task cleans meta info.
+    """
+    def __init__(self, service_type, time_interval):
+        self.service_type = service_type
+        self.time_interval = time_interval
+
+    def execute(self, eopatch):
+        eopatch.meta_info['service_type'] = self.service_type
+        eopatch.meta_info['time_interval'] = self.time_interval
+
+        return eopatch
+
+
 ###############################################################################
 # Features
 ###############################################################################

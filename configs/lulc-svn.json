@@ -20,26 +20,32 @@
         {
             "layer": "BANDS-S2-L1C",
             "feature": "BANDS",
-            "service_type": "WCS",
+            // "service_type": "WCS",
+            "service_type": "WMS",
             "data_source": "SENTINEL2_L1C",
             "custom_url_params": {
                 "EVALSCRIPT": "return [B01,B02,B03,B04,B05,B06,B07,B08,B8A,B09,B10,B11,B12]"
             },
-            "size_x": "10m",
-            "size_y": "10m",
-            "maxcc": 0.8,
-            "time_difference": 7200
+            // "size_x": "10m",
+            "size_x": 500,
+            // "size_y": "10m",
+            "size_y": 505,
+            "maxcc": 0.8
+            // "time_difference": 7200
         },
         {
             "layer": "DEM",
             "feature": ["DATA_TIMELESS", "DEM"],
-            "service_type": "WCS",
+            // "service_type": "WCS",
+            "service_type": "WMS",
             "data_source": "DEM",
             "custom_url_params": {
                 "EVALSCRIPT": "return [DEM]"
             },
-            "size_x": "10m",
-            "size_y": "10m"
+            // "size_x": "10m",
+            "size_x": 500,
+            // "size_y": "10m"
+            "size_y": 505
         }
     ],
     "reference_data": {
@@ -80,8 +86,10 @@
         },
         "cloud_mask": {
             "data_feature": "BANDS",
-            "cm_size_y": "80m",
-            "cm_size_x": "80m",
+            // "cm_size_x": "80m",
+            "cm_size_x": 500,
+            // "cm_size_y": "80m",
+            "cm_size_y": 505,
             "cmask_feature": "CLM",
             "cprobs_feature": "CLP"
         }

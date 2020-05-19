@@ -14,7 +14,7 @@ import numpy as np
 from eolearn.core import EOExecutor, LinearWorkflow, OverwritePermission, \
     SaveTask
 from eolearn.io import SentinelHubOGCInput
-from sentinelhub import BBoxSplitter, CRS
+from sentinelhub import BBox, BBoxSplitter, CRS
 from shapely.geometry import Polygon
 from tqdm.auto import tqdm
 
@@ -58,16 +58,22 @@ def download_tqdm(url, file_path):
         raise e
 
 
-def get_countries():
-    """Get countries data (shapes, names, ...).
+def get_country(country_code):
+    """Get country data (shape, name, ...).
     If data doesn't exist, try to download it first.
 
-    :return: Countries data in form of GeoDataFrame.
+    :return: Country data in form of GeoDataFrame.
     :rtype: GeoDataFrame
     """
     global report
 
     countries_dir = const.DATA_EXTERNAL_DIR / 'countries'
+    country_path = countries_dir / f'{country_code}.geojson'
+
+    # If country file is already prepared, load it.
+    if country_path.is_file():
+        return gpd.read_file(country_path), True
+
     countries_base_name = const.COUNTRIES_BASE_URL.split('/')[-1]
 
     if not countries_dir.is_dir():
@@ -105,7 +111,8 @@ def get_countries():
         log.info(f'Downloaded {formatted_total_size} in {dl_time:.2f} seconds')
 
     # Load downloaded data.
-    return gpd.read_file(countries_dir / f'{countries_base_name}.shp')
+    countries = gpd.read_file(countries_dir / f'{countries_base_name}.shp')
+    return countries.loc[countries['SOV_A3'] == country_code], False
 
 
 def define_AOI(cfg, data_dir):
@@ -122,28 +129,32 @@ def define_AOI(cfg, data_dir):
     """
     aoi_cfg = cfg['AOI']
 
-    # Get countries data.
-    countries = get_countries()
-
-    # Select country based on configuration.
-    country = countries.loc[countries['SOV_A3'] == aoi_cfg['country']]
+    # Get country data.
+    country_code = aoi_cfg['country']
+    country, is_prepared = get_country(country_code)
 
     if country.shape[0] < 1:
-        log.error(f'Invalid country code: {aoi_cfg["country"]}')
+        log.error(f'Invalid country code: {country_code}')
         raise Exception('Invalid configuration')
     else:
         country_name = country.iloc[0]['SOVEREIGNT']
+
         log.info(
-            f'Selected country: {country_name} ({aoi_cfg["country"]})'
+            f'Selected country: {country_name} ({country_code})'
         )
 
     # Buffer it a little bit.
+    if is_prepared:
+        geometry = country.geometry.tolist()
+    else:
+        geometry = country.geometry.buffer(aoi_cfg['buffer']).tolist()
+
     country = gpd.GeoDataFrame(
         {
             'name': [country_name]
         },
         crs=country.crs,
-        geometry=country.geometry.buffer(aoi_cfg['buffer']).tolist()
+        geometry=geometry
     )
 
     # Convert CRS.
@@ -166,14 +177,33 @@ def define_AOI(cfg, data_dir):
         f'{country_width:.0f} x {country_height:.0f} m2'
     )
 
-    bbox_splitter = BBoxSplitter(
-        [country_shape],
-        country_crs,
-        tuple(aoi_cfg['grid'])
-    )
+    aoi_dir = const.DATA_EXTERNAL_DIR / 'AOI'
 
-    bbox_list = np.array(bbox_splitter.get_bbox_list())
-    info_list = np.array(bbox_splitter.get_info_list())
+    if not aoi_dir.is_dir():
+        # Create new split.
+        bbox_splitter = BBoxSplitter(
+            [country_shape],
+            country_crs,
+            tuple(aoi_cfg['grid'])
+        )
+
+        bbox_list = np.array(bbox_splitter.get_bbox_list())
+        info_list = np.array(bbox_splitter.get_info_list())
+    else:
+        # Load existing AOI split
+        bbox_list = []
+        info_list = []
+        aoi = gpd.read_file(aoi_dir / 'aoi.shp')
+
+        for idx, row in aoi.iterrows():
+            info_list.append({
+                'index_x': row['index_x'],
+                'index_y': row['index_y'],
+            })
+            bbox_list.append(BBox(row.geometry.bounds, country_crs))
+
+        bbox_list = np.array(bbox_list)
+        info_list = np.array(info_list)
 
     tile_shape = bbox_list[0].geometry
     tile_width = tile_shape.bounds[2] - tile_shape.bounds[0]

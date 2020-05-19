@@ -21,7 +21,7 @@ from sentinelhub import DataSource
 from src.eolearn.predicates import SentinelHubValidData
 # ValidDataFractionPredicate
 from src.eolearn.tasks import AddBaseFeatures, AddGray, \
-    AddStreamTemporalFeaturesTask, AddGradientTask, ExtractEdgesTask
+    AddStreamTemporalFeaturesTask, AddGradientTask, CleanMeta, ExtractEdgesTask
 from src.utils import config, const, logging, misc
 
 
@@ -50,6 +50,12 @@ def init_workflow(cfg, input_dir, output_dir):
     load = LoadTask(
         str(input_dir),
         lazy_loading=True
+    )
+
+    input_cfg = config.get_sh_input_config(cfg, DataSource.SENTINEL2_L1C)
+    clean_meta = CleanMeta(
+        input_cfg['service_type'].lower(),
+        cfg['time_interval']
     )
 
     # EOTask: Add gradient
@@ -98,10 +104,10 @@ def init_workflow(cfg, input_dir, output_dir):
         cfg['features']
     )
 
-    add_stream_features = [
-        AddStreamTemporalFeaturesTask(data_feature=feature)
-        for feature in cfg['features']
-    ]
+    # add_stream_features = [
+    #     AddStreamTemporalFeaturesTask(data_feature=feature)
+    #     for feature in cfg['features']
+    # ]
 
     # EOTask: Rasterize reference data
     # ================================
@@ -114,7 +120,7 @@ def init_workflow(cfg, input_dir, output_dir):
     log.info(f'Loading {reference_file}')
     reference_data = gpd.read_file(
         reference_dir / 'data.shp',
-        bbox=misc.get_aoi_bbox(cfg)
+        # bbox=misc.get_aoi_bbox(cfg)
     )
     log.info('Reference data loaded.')
 
@@ -231,15 +237,16 @@ def init_workflow(cfg, input_dir, output_dir):
 
     workflow = LinearWorkflow(
         load,
-        add_gradient,
-        add_cloud_mask,
-        add_valid_data_mask,
-        add_base_features,
-        *add_stream_features,
+        clean_meta,
+        # add_gradient,
+        # add_cloud_mask,
+        # add_valid_data_mask,
+        # add_base_features,
+        # *add_stream_features,
         rasterize_reference_data,
         erode_reference_mask,
-        add_gray,
-        extract_edges,
+        # add_gray,
+        # extract_edges,
         # merge_features,
         # filter_valid_frames,
         # interpolate_invalid_data,
