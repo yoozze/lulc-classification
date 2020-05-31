@@ -11,8 +11,8 @@ WORKFLOW = [
     'data_download',
     'data_preprocess',
     'data_sample',
+    'data_postprocess',
     'model_train',
-    'model_predict',
     'model_evaluate',
     'visualize',
     'report',
@@ -133,6 +133,17 @@ def sample(c, config_name, predecessors=False, successors=False):
 
 
 @task(help=WORKFLOW_TASK_HELP)
+def postprocess(c, config_name, predecessors=False, successors=False):
+    """Postprocess data for given configuration.
+    """
+    run_workflow_tasks(
+        c,
+        get_task_workflow('data_postprocess', predecessors, successors),
+        config_name
+    )
+
+
+@task(help=WORKFLOW_TASK_HELP)
 def train(c, config_name, predecessors=False, successors=False):
     """Train model for given configuration.
     """
@@ -182,13 +193,21 @@ def run(c, config_name):
         - download
         - preprocess
         - sample
+        - postprocess
         - train
-        - predict
         - evaluate
         - visualize
         - report
     """
     run_workflow_tasks(c, WORKFLOW, config_name)
+
+
+@task()
+def info(c, config_name):
+    """Print configuration info.
+    """
+    print(PYTHON_INTERPRETER)
+    run_py(c, f'src/tasks/info.py {config_name}')
 
 
 @task

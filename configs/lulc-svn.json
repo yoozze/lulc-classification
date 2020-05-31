@@ -9,43 +9,43 @@
     "AOI": {
         "country": "SVN",
         "crs": "UTM_33N",
-        // "buffer": 0.05,
-        "buffer": 0.03,
+        "buffer": 0.05,
+        // "buffer": 0.03,
         // "grid": [75, 51],
         "grid": [50, 34],
-        // "regions": [[[42, 27], [44, 29]]]
-        "regions": [[[25, 17], [28, 20]]]
+        // "regions": [[[25, 17], [28, 20]]]
+        "regions": []
     },
     "sh_inputs": [
         {
             "layer": "BANDS-S2-L1C",
             "feature": "BANDS",
-            // "service_type": "WCS",
-            "service_type": "WMS",
+            "service_type": "WCS",
+            // "service_type": "WMS",
             "data_source": "SENTINEL2_L1C",
             "custom_url_params": {
                 "EVALSCRIPT": "return [B01,B02,B03,B04,B05,B06,B07,B08,B8A,B09,B10,B11,B12]"
             },
-            // "size_x": "10m",
-            "size_x": 500,
-            // "size_y": "10m",
-            "size_y": 505,
+            "size_x": "10m",
+            // "size_x": 505,
+            "size_y": "10m",
+            // "size_y": 500,
             "maxcc": 0.8
             // "time_difference": 7200
         },
         {
             "layer": "DEM",
             "feature": ["DATA_TIMELESS", "DEM"],
-            // "service_type": "WCS",
-            "service_type": "WMS",
+            "service_type": "WCS",
+            // "service_type": "WMS",
             "data_source": "DEM",
             "custom_url_params": {
                 "EVALSCRIPT": "return [DEM]"
             },
-            // "size_x": "10m",
-            "size_x": 500,
-            // "size_y": "10m"
-            "size_y": 505
+            "size_x": "10m",
+            // "size_x": 505,
+            "size_y": "10m"
+            // "size_y": 500
         }
     ],
     "reference_data": {
@@ -79,17 +79,17 @@
     },
     "cloud_detection": {
         "s2_pixel_cloud_detector": {
-            "threshold": 0.4,
+            // "threshold": 0.4,
             "average_over": 2,
             "dilation_size": 1,
             "all_bands": true
         },
         "cloud_mask": {
             "data_feature": "BANDS",
-            // "cm_size_x": "80m",
-            "cm_size_x": 500,
-            // "cm_size_y": "80m",
-            "cm_size_y": 505,
+            "cm_size_x": "80m",
+            // "cm_size_x": 505,
+            "cm_size_y": "80m",
+            // "cm_size_y": 500,
             "cmask_feature": "CLM",
             "cprobs_feature": "CLP"
         }

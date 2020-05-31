@@ -11,17 +11,18 @@ import cv2
 import geopandas as gpd
 import numpy as np
 from eolearn.core import EOExecutor, FeatureType, LinearWorkflow, \
-    OverwritePermission, LoadTask, SaveTask  # , MergeFeatureTask
-# from eolearn.features import LinearInterpolation, SimpleFilterTask
+    OverwritePermission, LoadTask, SaveTask
+from eolearn.features import LinearInterpolation, SimpleFilterTask
 from eolearn.geometry import VectorToRaster, ErosionTask
 from eolearn.mask import AddCloudMaskTask, get_s2_pixel_cloud_detector, \
     AddValidDataMaskTask
 from sentinelhub import DataSource
 
-from src.eolearn.predicates import SentinelHubValidData
-# ValidDataFractionPredicate
-from src.eolearn.tasks import AddBaseFeatures, AddGray, \
-    AddStreamTemporalFeaturesTask, AddGradientTask, CleanMeta, ExtractEdgesTask
+from src.eolearn.predicates import SentinelHubValidData, \
+    ValidDataFractionPredicate
+from src.eolearn.tasks import AddBaseFeatures, AddGradientTask, CleanMeta, \
+    ExtractEdgesTask
+# AddStreamTemporalFeaturesTask
 from src.utils import config, const, logging, misc
 
 
@@ -44,214 +45,213 @@ def init_workflow(cfg, input_dir, output_dir):
     :rtype: LinearWorkflow
     """
 
+    tasks = []
+
     # EOTask: Load data
     # =================
 
-    load = LoadTask(
+    tasks.append(LoadTask(
         str(input_dir),
         lazy_loading=True
-    )
+    ))
 
     input_cfg = config.get_sh_input_config(cfg, DataSource.SENTINEL2_L1C)
-    clean_meta = CleanMeta(
-        input_cfg['service_type'].lower(),
+    tasks.append(CleanMeta(
+        input_cfg,
         cfg['time_interval']
-    )
-
-    # EOTask: Add gradient
-    # ====================
-    # Calculate inclination from DEM and add it to timeless masks.
-
-    add_gradient = AddGradientTask(
-        (FeatureType.DATA_TIMELESS, 'DEM'),
-        (FeatureType.DATA_TIMELESS, 'INCLINATION')
-    )
+    ))
 
     # EOTask: Add cloud mask
     # ======================
     # Use Sentinel Hub's `S2PixelCloudDetector` classifier.
 
-    clouds_cfg = cfg['cloud_detection']
-    cloud_classifier = get_s2_pixel_cloud_detector(
-        **clouds_cfg['s2_pixel_cloud_detector']
-    )
-    add_cloud_mask = AddCloudMaskTask(
-        cloud_classifier,
-        **clouds_cfg['cloud_mask']
-    )
+    if 'cloud_detection' in cfg:
+        clouds_cfg = cfg['cloud_detection']
+        cloud_classifier = get_s2_pixel_cloud_detector(
+            **clouds_cfg['s2_pixel_cloud_detector']
+        )
+        tasks.append(AddCloudMaskTask(
+            cloud_classifier,
+            **clouds_cfg['cloud_mask']
+        ))
 
     # EOTask: Add valid data mask
     # ===========================
     # Validate pixels using SentinelHub's cloud mask and Sen2Corr's
     # classification map.
 
-    add_valid_data_mask = AddValidDataMaskTask(
-        SentinelHubValidData(),
-        'IS_VALID'
-    )
-
-    # EOTask: Add features
-    # ====================-
-    # Add indices and time series based (stream) features.
-
-    input_cfg = config.get_sh_input_config(cfg, DataSource.SENTINEL2_L1C)
-    band_names = config.get_band_names(cfg, DataSource.SENTINEL2_L1C)
-    bands_feature = input_cfg['feature']
-
-    add_base_features = AddBaseFeatures(
-        bands_feature,
-        band_names,
-        cfg['features']
-    )
-
-    # add_stream_features = [
-    #     AddStreamTemporalFeaturesTask(data_feature=feature)
-    #     for feature in cfg['features']
-    # ]
-
-    # EOTask: Rasterize reference data
-    # ================================
-    # Rasterize reference data to a new timeless mask.
-
-    reference_dir = const.DATA_EXTERNAL_DIR / 'reference'
-    reference_file = reference_dir / 'data.shp'
-
-    # Load reference data for selected AOI.
-    log.info(f'Loading {reference_file}')
-    reference_data = gpd.read_file(
-        reference_dir / 'data.shp',
-        # bbox=misc.get_aoi_bbox(cfg)
-    )
-    log.info('Reference data loaded.')
-
-    rasterize_reference_data = VectorToRaster(
-        reference_data,
-        (FeatureType.MASK_TIMELESS, 'REF'),
-        values_column='CLASS',
-        raster_shape=(FeatureType.MASK, 'IS_VALID'),
-        raster_dtype=np.uint8
-    )
-
-    # EOTask: Erode reference mask
-    # ============================
-
-    erode_reference_mask = ErosionTask(
-        mask_feature=(
-            FeatureType.MASK_TIMELESS,
-            'REF',
-            'REF_MORPHED'
-        ),
-        disk_radius=1
-    )
-
-    # EOTask: Extract edges
-    # =====================
-
-    add_gray = AddGray(bands_feature)
-
-    extract_edges = ExtractEdgesTask(
-        edge_features=[
-            {
-                "FeatureType": FeatureType.DATA,
-                "FeatureName": 'EVI',
-                "CannyThresholds": (40, 80),
-                "BlurArguments": ((5, 5), 2)
-            },
-            {
-                "FeatureType": FeatureType.DATA,
-                "FeatureName": 'ARVI',
-                "CannyThresholds": (40, 80),
-                "BlurArguments": ((5, 5), 2)
-            },
-            {
-                "FeatureType": FeatureType.DATA,
-                "FeatureName": 'NDVI',
-                "CannyThresholds": (40, 100),
-                "BlurArguments": ((5, 5), 2)
-            },
-            {
-                "FeatureType": FeatureType.DATA,
-                "FeatureName": 'GRAY',
-                "CannyThresholds": (5, 40),
-                "BlurArguments": ((3, 3), 2)
-            }
-        ],
-        structuring_element=[
-            [0, 1, 0],
-            [1, 1, 1],
-            [0, 1, 0]
-        ],
-        excluded_features=[],
-        dilation_mask=cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
-        erosion_mask=cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-        output_feature=(FeatureType.MASK_TIMELESS, 'EDGES_INV'),
-        adjust_function=lambda x: cv2.GaussianBlur(x, (9, 9), 5),
-        adjust_threshold=0.05,
-        yearly_low_threshold=0.8
-    )
-
-    # EOTask: Merge features
-    # ======================
-
-    # bands_features = [input_cfg['feature'] for input_cfg in cfg['sh_inputs']]
-    # merge_features = MergeFeatureTask(
-    #     {FeatureType.DATA: [*bands_features, *cfg['features']]},
-    #     (FeatureType.DATA, 'FEATURES')
-    # )
+    if 'valid_data' in cfg:
+        tasks.append(AddValidDataMaskTask(
+            SentinelHubValidData(),
+            'IS_VALID'
+        ))
 
     # EOTask: Filter valid frames
     # ===========================
     # Keep frames with valid coverage above given threshold.
 
-    # filter_valid_frames = SimpleFilterTask(
-    #     (FeatureType.MASK, 'IS_VALID'),
-    #     ValidDataFractionPredicate(cfg['filtering']['threshold'])
-    # )
+    if 'filter' in cfg:
+        tasks.add(SimpleFilterTask(
+            (FeatureType.MASK, 'IS_VALID'),
+            ValidDataFractionPredicate(cfg['filter']['threshold'])
+        ))
 
     # EOTask: Interpolate
     # ===================
     # Interpolate invalid pixels of timeseries and resample it to new uniform
     # time sequence.
 
-    # interpolate_invalid_data = LinearInterpolation(
-    #     'FEATURES',
-    #     mask_feature=(FeatureType.MASK, 'IS_VALID'),
-    #     copy_features=[
-    #         (FeatureType.MASK_TIMELESS, 'REF'),
-    #         (FeatureType.MASK_TIMELESS, 'REF_MORPHED'),
-    #     ],
-    #     resample_range=(*cfg['time_interval'], cfg['interpolation']['step']),
-    #     bounds_error=False
-    # )
+    if 'interpolation' in cfg:
+        bands_feature = config.get_feature_name(cfg, DataSource.SENTINEL2_L1C)
+        tasks.add(LinearInterpolation(
+            feature=bands_feature,
+            mask_feature=(FeatureType.MASK, 'IS_VALID'),
+            copy_features=[
+                tuple(FeatureType[t[0]], t[1])
+                for t in cfg['interpolation']['copy_features']
+            ],
+            bounds_error=False
+        ))
+
+    # EOTask: Add features
+    # ====================-
+    # Add indices and time series based (stream) features.
+
+    if 'features' in cfg:
+        bands_feature = config.get_feature_name(cfg, DataSource.SENTINEL2_L1C)
+        band_names = config.get_band_names(cfg, DataSource.SENTINEL2_L1C)
+
+        tasks.append(AddBaseFeatures(
+            bands_feature,
+            band_names,
+            cfg['features']
+        ))
+
+    # add_stream_features = [
+    #     AddStreamTemporalFeaturesTask(data_feature=feature)
+    #     for feature in cfg['features']
+    # ]
+
+    # EOTask: Add gradient
+    # ====================
+    # Calculate inclination from DEM and add it to timeless masks.
+
+    if 'gradient' in cfg:
+        tasks.append(AddGradientTask(
+            (FeatureType.DATA_TIMELESS, 'DEM'),
+            (FeatureType.DATA_TIMELESS, 'INCLINATION'),
+            sigma=cfg['gradient']['sigma']
+        ))
+
+    # EOTask: Extract edges
+    # =====================
+
+    if 'edges' in cfg:
+        tasks.append(ExtractEdgesTask(
+            edge_features=[
+                {
+                    'FeatureType': FeatureType[f['feature_type']],
+                    'FeatureName': f['feature_name'],
+                    'CannyThresholds': tuple(f['canny_thresholds']),
+                    'BlurArguments': tuple(
+                        tuple(f['blur_arguments'][0]),
+                        f['blur_arguments'][1]
+                    )
+                }
+                for f in cfg['edges']['edge_features']
+            ],
+            structuring_element=cfg['edges']['structuring_element'],
+            excluded_features=[],
+            dilation_mask=cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                tuple(cfg['edges']['dilation_mask'])
+            ),
+            erosion_mask=cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                tuple(cfg['edges']['erosion_mask'])
+            ),
+            output_feature=(FeatureType.MASK_TIMELESS, 'EDGES_INV'),
+            adjust_function=lambda x: cv2.GaussianBlur(x, (9, 9), 5),
+            adjust_threshold=cfg['edges']['adjust_threshold'],
+            yearly_low_threshold=cfg['edges']['yearly_low_threshold']
+        ))
+
+    # EOTask: Rasterize reference data
+    # ================================
+    # Rasterize reference data to a new timeless mask.
+
+    if 'raster' in cfg:
+        reference_dir = const.DATA_EXTERNAL_DIR / 'reference'
+
+        for reference_cfg in cfg['reference_data']:
+            reference_name = reference_cfg['name']
+            reference_file = \
+                reference_dir / reference_name / 'data.shp'
+
+            # Load reference data for selected AOI.
+            log.info(f'Loading {reference_file}')
+            reference_data = gpd.read_file(
+                reference_file,
+                # bbox=misc.get_aoi_bbox(cfg)
+            )
+            log.info('Reference data loaded.')
+
+            tasks.append(VectorToRaster(
+                reference_data,
+                (FeatureType.MASK_TIMELESS, reference_name),
+                values_column='CLASS',
+                raster_shape=(FeatureType.MASK, 'IS_DATA'),
+                raster_dtype=np.uint8
+            ))
+            tasks.append(VectorToRaster(
+                reference_data,
+                (FeatureType.MASK_TIMELESS, f'{reference_name}_G'),
+                values_column='CLASS_G',
+                raster_shape=(FeatureType.MASK, 'IS_DATA'),
+                raster_dtype=np.uint8
+            ))
+
+            if cfg['raster']['erosion']:
+                tasks.append(ErosionTask(
+                    mask_feature=(
+                        FeatureType.MASK_TIMELESS,
+                        reference_name,
+                        f'{reference_name}_E'
+                    ),
+                    disk_radius=1
+                ))
+                tasks.append(ErosionTask(
+                    mask_feature=(
+                        FeatureType.MASK_TIMELESS,
+                        f'{reference_name}_G',
+                        f'{reference_name}_G_E'
+                    ),
+                    disk_radius=1
+                ))
 
     # EOTask: Save data
     # =================
+    features = ...
 
-    save = SaveTask(
+    if 'preprocess_save' in cfg:
+        features = []
+        for feature in cfg['preprocess_save']:
+            if isinstance(feature, list):
+                features.append(tuple([FeatureType[feature[0]], feature[1]]))
+            else:
+                features.append(FeatureType[feature])
+
+    tasks.append(SaveTask(
         str(output_dir),
+        features=features,
+        # compress_level=1,
         overwrite_permission=OverwritePermission.OVERWRITE_PATCH
-    )
+    ))
 
     # EOWorkflow
     # ==========
 
-    workflow = LinearWorkflow(
-        load,
-        clean_meta,
-        # add_gradient,
-        # add_cloud_mask,
-        # add_valid_data_mask,
-        # add_base_features,
-        # *add_stream_features,
-        rasterize_reference_data,
-        erode_reference_mask,
-        # add_gray,
-        # extract_edges,
-        # merge_features,
-        # filter_valid_frames,
-        # interpolate_invalid_data,
-        save
-    )
+    workflow = LinearWorkflow(*tasks)
 
     return workflow
 
@@ -270,8 +270,12 @@ def init_execution_args(tasks, input_dir, output_dir):
     :rtype: dict[str, object]
     """
     execution_args = []
-
+    # interval = [1041, 1061]
+    # idxs = [501, 502]
+    # for idx in range(*interval):
+    # for idx in idxs:
     for path in input_dir.iterdir():
+        # eopatch_folder = f'eopatch_{idx}'
         eopatch_folder = path.name
         patch_meta = output_dir / eopatch_folder / 'meta_info.pkl'
 
@@ -404,6 +408,8 @@ def main(config_name, timestamp):
     try:
         # Load configuration.
         cfg = config.load(config_name, log=log)
+        report['config'] = cfg
+        misc.print_header(cfg, log)
 
         # Preproces data.
         preprocess_data(cfg, log_dir)

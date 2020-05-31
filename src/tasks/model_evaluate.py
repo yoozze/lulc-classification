@@ -125,6 +125,8 @@ def main(config_name, timestamp):
     try:
         # Load configuration.
         cfg = config.load(config_name, log=log)
+        report['config'] = cfg
+        misc.print_header(cfg, log)
 
         # Evaluate models.
         evaluate_models(cfg, log_dir)

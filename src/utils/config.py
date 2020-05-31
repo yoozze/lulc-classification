@@ -161,6 +161,28 @@ def get_sh_input_config(cfg, data_source):
         if sh_input['data_source'] == data_source.name:
             return sh_input
 
+    return None
+
+
+def get_feature_name(cfg, data_source):
+    """Get feature name for given data source.
+
+    :param cfg: Configuration
+    :type cfg: dict
+    :param data_source: Data source
+    :type data_source: DataSource
+    :return: Feature name
+    :rtype: str
+    """
+    for sh_input in cfg['sh_inputs']:
+        if sh_input['data_source'] == data_source.name:
+            if 'feature' in sh_input:
+                return sh_input['feature']
+            else:
+                break
+
+    return 'BANDS'
+
 
 def get_band_names(cfg, data_source):
     """Get lis of band names from configuration for given data source.

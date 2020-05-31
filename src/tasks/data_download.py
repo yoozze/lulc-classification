@@ -11,8 +11,8 @@ import requests
 import patoolib
 import geopandas as gpd
 import numpy as np
-from eolearn.core import EOExecutor, LinearWorkflow, OverwritePermission, \
-    SaveTask
+from eolearn.core import EOExecutor, LoadTask, LinearWorkflow, \
+    OverwritePermission, SaveTask
 from eolearn.io import SentinelHubOGCInput
 from sentinelhub import BBox, BBoxSplitter, CRS
 from shapely.geometry import Polygon
@@ -127,6 +127,7 @@ def define_AOI(cfg, data_dir):
     :return: Zip of bounding boxes and their indices covering selected AIO.
     :rtype: zip((int, BBox))
     """
+    # TODO: Too complex function, simpify, split, ...
     aoi_cfg = cfg['AOI']
 
     # Get country data.
@@ -177,9 +178,16 @@ def define_AOI(cfg, data_dir):
         f'{country_width:.0f} x {country_height:.0f} m2'
     )
 
-    aoi_dir = const.DATA_EXTERNAL_DIR / 'AOI'
+    # Try to load AOI if already defined.
+    for base_dir in [data_dir, const.DATA_EXTERNAL_DIR]:
+        aoi_file = base_dir / 'AOI' / 'aoi.shp'
+        if aoi_file.is_file():
+            break
 
-    if not aoi_dir.is_dir():
+    aoi = None
+    selected = None
+
+    if not aoi_file.is_file():
         # Create new split.
         bbox_splitter = BBoxSplitter(
             [country_shape],
@@ -190,10 +198,13 @@ def define_AOI(cfg, data_dir):
         bbox_list = np.array(bbox_splitter.get_bbox_list())
         info_list = np.array(bbox_splitter.get_info_list())
     else:
-        # Load existing AOI split
+        # Load existing AOI split.
         bbox_list = []
         info_list = []
-        aoi = gpd.read_file(aoi_dir / 'aoi.shp')
+        aoi = gpd.read_file(aoi_file)
+
+        if 'selected' in aoi:
+            selected = np.array(aoi.selected.to_list(), dtype=bool)
 
         for idx, row in aoi.iterrows():
             info_list.append({
@@ -212,39 +223,43 @@ def define_AOI(cfg, data_dir):
     log.info(f'Tile surface: {tile_width:.0f} x {tile_height:.0f} m2')
     log.info(f'Number of tiles: {len(bbox_list)}')
 
-    # Store bounding box grid to GeoDataFrame.
-    geometry = [Polygon(bbox.get_polygon()) for bbox in bbox_list]
-    indices_x = np.array([info['index_x'] for info in info_list])
-    indices_y = np.array([info['index_y'] for info in info_list])
+    # If aoi was not loaded or if `selected` column was not present in loaded
+    # aoi, define new aoi with `selected` column.
+    if (aoi is None) or (selected is None):
+        # Store bounding box grid to GeoDataFrame.
+        geometry = [Polygon(bbox.get_polygon()) for bbox in bbox_list]
+        indices_x = np.array([info['index_x'] for info in info_list])
+        indices_y = np.array([info['index_y'] for info in info_list])
 
-    if not len(aoi_cfg['regions']):
-        # If no region is selected in config file, mark all tiles as selected.
-        selected = np.ones(len(geometry))
-    else:
-        # Mark tiles of regions defined in config file as selected.
-        selected_x = np.zeros(len(geometry), dtype=bool)
-        selected_y = np.zeros(len(geometry), dtype=bool)
+        if not len(aoi_cfg['regions']):
+            # If no region is selected in config file, mark all tiles as
+            # selected.
+            selected = np.ones(len(geometry), dtype=bool)
+        else:
+            # Mark tiles of regions defined in config file as selected.
+            selected_x = np.zeros(len(geometry), dtype=bool)
+            selected_y = np.zeros(len(geometry), dtype=bool)
 
-        for box in aoi_cfg['regions']:
-            for i in range(box[0][0], box[1][0] + 1):
-                selected_x = np.logical_or(selected_x, indices_x == i)
+            for box in aoi_cfg['regions']:
+                for i in range(box[0][0], box[1][0] + 1):
+                    selected_x = np.logical_or(selected_x, indices_x == i)
 
-            for i in range(box[0][1], box[1][1] + 1):
-                selected_y = np.logical_or(selected_y, indices_y == i)
+                for i in range(box[0][1], box[1][1] + 1):
+                    selected_y = np.logical_or(selected_y, indices_y == i)
 
-        selected = np.logical_and(selected_x, selected_y)
+            selected = np.logical_and(selected_x, selected_y)
+
+        aoi = gpd.GeoDataFrame(
+            {
+                'index_x': indices_x,
+                'index_y': indices_y,
+                'selected': selected
+            },
+            crs=country_crs.pyproj_crs(),
+            geometry=geometry
+        )
 
     log.info(f'Number of selected tiles: {sum(selected)}')
-
-    aoi = gpd.GeoDataFrame(
-        {
-            'index_x': indices_x,
-            'index_y': indices_y,
-            'selected': selected
-        },
-        crs=country_crs.pyproj_crs(),
-        geometry=geometry
-    )
 
     # Save country/AOI bounding box grid.
     aoi_dir = data_dir / 'AOI'
@@ -252,20 +267,32 @@ def define_AOI(cfg, data_dir):
     if not aoi_dir.is_dir():
         aoi_dir.mkdir(parents=True)
 
-    # country.to_file(aoi_dir / 'country.geojson', driver='GeoJSON')
-    country.to_file(aoi_dir / 'country.shp')
+    driver = ('ESRI Shapefile', 'shp')
+    # driver = ('GeoJSON', 'geojson')
 
-    # aoi_gdf.to_file(aoi_dir / 'aoi.geojson', driver='GeoJSON')
-    aoi.to_file(aoi_dir / 'aoi.shp')
+    save_list = [
+        (country, 'country'),
+        (aoi, 'aoi')
+    ]
+
+    for gdf, name in save_list:
+        file_path = aoi_dir / f'{name}.{driver[1]}'
+        if not file_path.is_file():
+            gdf.to_file(file_path, driver[0])
 
     return zip(aoi.index[selected].tolist(), bbox_list[selected].tolist())
 
 
-def init_workflow(cfg, output_dir):
+def init_workflow(cfg, input_dir, output_dir):
     """Initialize tasks and build linear workflow.
 
     :param cfg: Configuration
     :type cfg: dict
+    :param input_dir: Input directory where initial patch(es) can be prepared.
+        It can contain multiple patches named `patch_{i}` or one patch named
+        `patch`, in which case every downloaded patch will inherit data from
+        this one.
+    :type input_dir: Path
     :param output_dir: Output directory, where processed data patches will be
         stored.
     :type output_dir: Path
@@ -273,12 +300,22 @@ def init_workflow(cfg, output_dir):
     :rtype: LinearWorkflow
     """
 
+    tasks = []
+
+    # EOTask: Load data
+    # =================
+
+    if input_dir.is_dir():
+        tasks.append(LoadTask(
+            str(input_dir),
+            lazy_loading=True
+        ))
+
     # EOTask: Download EO data
     # ========================
     # Use Sentinel Hub's OGC service.
 
     sh_instance_id = os.getenv('SH_INSTANCE_ID')
-    add_data = []
 
     # Support multiple input services.
     for sh_input_cfg in cfg['sh_inputs']:
@@ -287,34 +324,32 @@ def init_workflow(cfg, output_dir):
         input_cfg['instance_id'] = sh_instance_id
 
         # Initialize service.
-        ogc_input = SentinelHubOGCInput(**input_cfg)
-        add_data.append(ogc_input)
+        tasks.append(SentinelHubOGCInput(**input_cfg))
 
     # EOTask: Save data
     # =================
 
-    save = SaveTask(
+    tasks.append(SaveTask(
         str(output_dir),
         overwrite_permission=OverwritePermission.OVERWRITE_PATCH
-    )
+    ))
 
     # EOWorkflow
     # ==========
 
-    workflow = LinearWorkflow(
-        *add_data,
-        save
-    )
+    workflow = LinearWorkflow(*tasks)
 
     return workflow
 
 
-def init_execution_args(cfg, tasks, output_dir):
+def init_execution_args(cfg, tasks, input_dir, output_dir):
     """Define list of argument dictionaries for tasks to be fed to
     executioner together with workflow.
 
     :param tasks: Dictionary of tasks
     :type tasks: dict[str, EOTask]
+    :param input_dir: Input directory where initial patch(es) can be prepared.
+    :type input_dir: Path
     :param output_dir: Output data directory
     :type output_dir: Path
     :return: List of argument distionaries
@@ -346,6 +381,12 @@ def init_execution_args(cfg, tasks, output_dir):
                 args[task] = {
                     'eopatch_folder': eopatch_folder
                 }
+            elif task_name == 'LoadTask':
+                args[task] = {
+                    'eopatch_folder': eopatch_folder
+                    if Path(input_dir / eopatch_folder).is_dir()
+                    else 'patch'
+                }
             else:
                 args[task] = {
                     'bbox': bbox,
@@ -368,6 +409,7 @@ def download_eo_data(cfg, log_dir):
     global report
 
     data_dir = misc.get_raw_data_dir(cfg)
+    input_dir = data_dir / 'input'
     output_dir = data_dir / 'patches'
 
     if not output_dir.is_dir():
@@ -376,6 +418,7 @@ def download_eo_data(cfg, log_dir):
     # Initialize workflow.
     workflow = init_workflow(
         cfg,
+        input_dir,
         output_dir
     )
 
@@ -383,6 +426,7 @@ def download_eo_data(cfg, log_dir):
     execution_args = init_execution_args(
         cfg,
         workflow.get_tasks(),
+        input_dir,
         output_dir
     )
 
@@ -421,7 +465,7 @@ def download_eo_data(cfg, log_dir):
         executor.make_report()
     else:
         ex_time = 0.0
-        log.info('All patches already downloaded.')
+        log.info('Nothing to downloaded.')
 
     report['dl_patches'] = {
         'quantity': total_executions,
@@ -438,8 +482,6 @@ def download_reference_data(cfg):
     global report
 
     reference_dir = const.DATA_EXTERNAL_DIR / 'reference'
-    reference_url = cfg['reference_data']['url']
-    reference_base_name = reference_url.split('/')[-1]
 
     if not reference_dir.is_dir():
         reference_dir.mkdir(parents=True)
@@ -450,48 +492,58 @@ def download_reference_data(cfg):
         'quantity': 0
     }
 
-    # Search for `shp` files.
-    shape_files = reference_dir.glob('*.shp')
+    for reference_cfg in cfg['reference_data']:
+        reference_url = reference_cfg['url']
+        reference_base_name = reference_url.split('/')[-1]
 
-    # If `shp` file doesn't exist, try to download reference data.
-    if not len(list(shape_files)):
-        reference_file = reference_dir / reference_base_name
+        reference_subdir = reference_dir / reference_cfg['name']
 
-        if reference_file.is_file():
-            log.info('Reference data archive already exists.')
-        else:
-            log.info(f'Downloading reference data: {reference_file}')
-            dl_time = time.time()
-            dl_size = download_tqdm(
-                reference_url,
-                reference_file
-            )
-            dl_time = time.time() - dl_time
+        if not reference_subdir.is_dir():
+            reference_subdir.mkdir(parents=True)
 
-            report['dl_reference']['time'] += dl_time
-            report['dl_reference']['size'] += dl_size
-            report['dl_reference']['quantity'] += 1
+        # Search for `shp` files.
+        shape_files = reference_subdir.glob('*.shp')
 
-            formatted_total_size = misc.format_data_size(dl_size)
-            log.info(
-                f'Downloaded {formatted_total_size} in {dl_time:.2f} seconds'
-            )
+        # If `shp` file doesn't exist, try to download reference data.
+        if not len(list(shape_files)):
+            reference_file = reference_subdir / reference_base_name
 
-        # Try to extract downloaded data.
-        try:
-            log.info(f'Extracting: {reference_file}')
-            patoolib.extract_archive(
-                str(reference_file),
-                outdir=str(reference_dir)
-            )
-            log.info('Extraction competed.')
-        except Exception as e:
-            log.error('Automatic extraction failed.')
-            log.info(
-                f'Please try to extract data manually to: '
-                f'{reference_dir}'
-            )
-            raise e
+            if reference_file.is_file():
+                log.info('Reference data archive already exists.')
+            else:
+                log.info(f'Downloading reference data: {reference_file}')
+                dl_time = time.time()
+                dl_size = download_tqdm(
+                    reference_url,
+                    reference_file
+                )
+                dl_time = time.time() - dl_time
+
+                report['dl_reference']['time'] += dl_time
+                report['dl_reference']['size'] += dl_size
+                report['dl_reference']['quantity'] += 1
+
+                formatted_total_size = misc.format_data_size(dl_size)
+                log.info(
+                    f'Downloaded {formatted_total_size} in {dl_time:.2f} '
+                    'seconds'
+                )
+
+            # Try to extract downloaded data.
+            try:
+                log.info(f'Extracting: {reference_file}')
+                patoolib.extract_archive(
+                    str(reference_file),
+                    outdir=str(reference_subdir)
+                )
+                log.info('Extraction competed.')
+            except Exception as e:
+                log.error('Automatic extraction failed.')
+                log.info(
+                    f'Please try to extract data manually to: '
+                    f'{reference_subdir}'
+                )
+                raise e
 
 
 def prepare_reference_data(cfg):
@@ -502,46 +554,53 @@ def prepare_reference_data(cfg):
     :raises Exception: File not found!
     """
     reference_dir = const.DATA_EXTERNAL_DIR / 'reference'
-    data_file = reference_dir / 'data.shp'
 
-    if not data_file.is_file():
-        shape_files = list(reference_dir.glob('*.shp'))
+    for reference_cfg in cfg['reference_data']:
+        reference_subdir = reference_dir / reference_cfg['name']
+        data_file = reference_subdir / 'data.shp'
 
-        if len(shape_files) < 1:
-            log.error('Couldn\'t find `shp` file.')
-            raise Exception('File not found!')
+        if not data_file.is_file():
+            shape_files = list(reference_subdir.glob('*.shp'))
 
-        log.info(f'Loading {shape_files[0]}')
-        ref_data = gpd.read_file(shape_files[0])
+            if len(shape_files) < 1:
+                log.error('Couldn\'t find `shp` file.')
+                raise Exception('File not found!')
 
-        ref_cfg = cfg['reference_data']
+            log.info(f'Loading {shape_files[0]}')
+            ref_data = gpd.read_file(shape_files[0])
 
-        # Map classes.
-        log.info('Mapping classes...')
-        class_column = ref_cfg['class_column']
-        classes = ref_cfg['classes']
+            class_column = reference_cfg['class_column']
 
-        class_map = {}
-        for id_new, group in classes.items():
-            for id_old in group:
-                class_map[id_old] = int(id_new)
+            # Duplicate class column.
+            ref_data['CLASS'] = ref_data[class_column]
+            ref_data['CLASS_G'] = ref_data[class_column]
 
-        ref_data[class_column] = ref_data[class_column].map(class_map)
+            # Map classes.
+            log.info('Mapping classes...')
+            classes = reference_cfg['classes']
 
-        # Rename class column.
-        columns = np.array(list(ref_data.columns))
-        columns[columns == class_column] = 'CLASS'
-        ref_data.columns = columns
+            class_g_map = {}
+            for id_new, group in classes.items():
+                for id_old in group:
+                    class_g_map[id_old] = int(id_new)
+            ref_data['CLASS_G'] = ref_data['CLASS_G'].map(class_g_map)
+            log.info(f'CLASS_G: {class_g_map}')
 
-        # Convert CRS.
-        log.info('Converting CRS...')
-        aoi_cfg = cfg['AOI']
-        country_crs = CRS[aoi_cfg['crs']]
-        ref_data = ref_data.to_crs(crs=country_crs.pyproj_crs())
+            old_ids = list(class_g_map.keys())
+            old_ids.sort()
+            class_map = {old_id: idx + 1 for idx, old_id in enumerate(old_ids)}
+            ref_data['CLASS'] = ref_data['CLASS'].map(class_map)
+            log.info(f'CLASS: {class_map}')
 
-        # Save data.
-        log.info(f'Saving {data_file}')
-        ref_data.to_file(data_file)
+            # Convert CRS.
+            log.info('Converting CRS...')
+            aoi_cfg = cfg['AOI']
+            country_crs = CRS[aoi_cfg['crs']]
+            ref_data = ref_data.to_crs(crs=country_crs.pyproj_crs())
+
+            # Save data.
+            log.info(f'Saving {data_file}')
+            ref_data.to_file(data_file)
 
     log.info('Reference data ready!')
 
@@ -577,6 +636,8 @@ def main(config_name, timestamp):
     try:
         # Load configuration.
         cfg = config.load(config_name, log=log)
+        report['config'] = cfg
+        misc.print_header(cfg, log)
 
         # Download EO data.
         download_eo_data(cfg, log_dir)

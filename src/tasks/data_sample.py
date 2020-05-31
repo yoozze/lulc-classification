@@ -1,7 +1,9 @@
 """Prepare subset of the data for modelling and evaluation.
 """
+import collections
 import os
 import random
+import re
 import sys
 import time
 from dotenv import find_dotenv, load_dotenv
@@ -9,9 +11,11 @@ from pathlib import Path
 
 import click
 import numpy as np
-from eolearn.core import EOExecutor, FeatureType, LinearWorkflow, LoadTask, \
-    OverwritePermission, SaveTask
+import pandas as pd
+from eolearn.core import EOExecutor, EOPatch, FeatureType, LinearWorkflow, \
+    LoadTask, OverwritePermission, SaveTask
 from eolearn.geometry import PointSamplingTask
+from sklearn.utils import resample
 
 from src.utils import config, logging, misc
 from src.eolearn.tasks import TrainTestSplit
@@ -22,127 +26,192 @@ log = None
 report = {}
 
 
-def init_workflow(cfg, input_dir, output_dir):
-    """Initialize tasks and build linear workflow.
-
-    :param cfg: Configuration
-    :type cfg: dict
-    :param input_dir: Input directory, where raw data patches are stored.
-    :type input_dir: Path
-    :param output_dir: Output directory, where sampled data patches will be
-        stored.
-    :type output_dir: Path
-    :return: Workflow
-    :rtype: LinearWorkflow
+def sample_patches(
+    path,
+    patches,
+    no_samples,
+    class_feature,
+    mask_feature,
+    features,
+    weak_classes,
+    samples_per_class=None,
+    debug=False,
+    seed=None,
+    class_frequency=False
+):
     """
-
-    # EOTask: Load data
-    # =================
-
-    load = LoadTask(
-        str(input_dir),
-        lazy_loading=True
-    )
-
-    # EOTask: Sample data
-    # ===================
-    classes = cfg['reference_data']['classes']
-    sample_data = PointSamplingTask(
-        n_samples=cfg['sampling']['n'],
-        ref_mask_feature='REF_MORPHED',
-        ref_labels=[int(k) for k, v in classes.items() if len(v)],
-        sample_features=[
-            (FeatureType.DATA, 'FEATURES'),
-            (FeatureType.MASK_TIMELESS, 'REF_MORPHED')
-        ],
-        return_new_eopatch=True
-    )
-
-    # EOTask: Split patches
-    # =====================
-    # Assign each patch subset id, i.e. 1 (train set) or 0 (test set)
-
-    # split = cfg['sampling']['split']
-    # args = {
-    #     'feature_name': 'subset'
-    # }
-
-    # if isinstance(split, float):
-    #     args['split'] = split
-
-    # train_test_split = TrainTestSplit(**args)
-    train_test_split = TrainTestSplit(feature_name='subset')
-
-    # EOTask: Save data
-    # =================
-
-    save = SaveTask(
-        str(output_dir),
-        overwrite_permission=OverwritePermission.OVERWRITE_PATCH
-    )
-
-    # EOWorkflow
-    # ==========
-
-    workflow = LinearWorkflow(
-        load,
-        sample_data,
-        train_test_split,
-        save
-    )
-
-    return workflow
-
-
-def init_execution_args(cfg, tasks, input_dir, output_dir):
-    """Define list of argument dictionaries for tasks to be fed to
-    executioner together with workflow.
-
-    :param cfg: Configuration
-    :type cfg: dict
-    :param tasks: Dictionary of tasks
-    :type tasks: dict[str, EOTask]
-    :param input_dir: Input data directory
-    :type input_dir: Path
-    :param output_dir: Output data directory
-    :type output_dir: Path
-    :return: List of argument distionaries
-    :rtype: dict[str, object]
+    :param path: Path to folder containing all patches, folders need to be
+        named eopatch_{number: 0 to no_patches-1}
+    :type path: Path
+    :param patches: List of patch IDs, e.g. [0, 1, ...]
+    :type patches: list[int]
+    :param no_samples: Number of samples taken per patch
+    :type no_samples: int
+    :param class_feature: Name of feature that contains class number.
+        The numbers in the array can be float or nan for no class
+    :type class_feature: (FeatureType, string)
+    :param mask_feature: Feature that defines the area from where samples are
+        taken, if None the whole image is used
+    :type mask_feature: (FeatureType, String) or None
+    :param features: Features to include in returned dataset for each pixel
+        sampled
+    :type features: array of type [(FeatureType, string), ...]
+    :param samples_per_class: Number of samples per class returned after
+        balancing. If the number is higher than minimal number of samples for
+        the smallest class then those numbers are upsampled by repetition.
+        If the argument is None then number is set to the size of the number of
+        samples of the smallest class
+    :type samples_per_class: int or None
+    :param debug: If set to True patch id and coordinates are included in
+        returned DataFrame
+    :param seed: Seed for random generator
+    :return: pandas DataFrame with columns
+        [class feature, features, patch_id, x coord, y coord].
+        id,x and y are used for testing
+    :param class_frequency: If set to True, the function also return
+        dictionary of each class frequency before balancing
+    :type class_frequency: boolean
+    :param weak_classes: Classes that when found also the neighbouring regions
+        will be checked and added if they contain one of the weak classes.
+        Used to enrich the samples
+    :type weak_classes: int list
     """
-    execution_args = []
-    eopatch_dirs = list(input_dir.iterdir())
-    split = cfg['sampling']['split']
+    if seed is not None:
+        random.seed(seed)
 
-    if isinstance(split, float):
-        total_len = len(eopatch_dirs)
-        train_len = round(total_len * split)
-        train_indices = random.sample(list(range(total_len)), k=train_len)
-        split = np.zeros((total_len,), dtype=np.uint8)
-        split[train_indices] = 1
-        split = list(split)
+    columns = [class_feature[1]] + [x[1] for x in features]
+    if debug:
+        columns = columns + ['patch_no', 'x', 'y']
 
-    for i, path in enumerate(eopatch_dirs):
-        eopatch_folder = path.name
-        patch_meta = output_dir / eopatch_folder / 'meta_info.pkl'
+    class_name = class_feature[1]
+    sample_dict = []
 
-        # Skip existing patches.
-        if patch_meta.is_file():
-            log.info(f'Patch {eopatch_folder} already exists.')
+    for patch_id in patches:
+        eopatch = EOPatch.load(
+            str(path / f'eopatch_{patch_id}'),
+            lazy_loading=True
+        )
+
+        if class_feature in eopatch.get_feature_list():
+            log.info(f'Sampling eopatch_{patch_id}')
+        else:
+            log.warning(f'No feature {class_feature} in eopatch_{patch_id}')
             continue
 
-        execution_args.append({
-            tasks['LoadTask']: {
-                'eopatch_folder': eopatch_folder
-            },
-            tasks['TrainTestSplit']: {
-                'subset': split[i]
-            },
-            tasks['SaveTask']: {
-                'eopatch_folder': eopatch_folder
-            }
-        })
+        _, height, width, _ = eopatch.data['BANDS'].shape
+        mask = eopatch[mask_feature[0]][mask_feature[1]].squeeze()
+        no_samples = min(height * width, no_samples)
 
-    return execution_args
+        # Finds all the pixels which are not masked
+        subsample_id = []
+        for h in range(height):
+            for w in range(width):
+                # Check if pixel has any NaNs.
+                has_nan = np.isnan(eopatch.data['BANDS'][:, h, w]).any()
+
+                # Skip pixels with NaNs and masked pixels.
+                if not has_nan and (mask is None or mask[h][w] == 1):
+                    subsample_id.append((h, w))
+
+        # First sampling
+        subsample_id = random.sample(
+            subsample_id,
+            min(no_samples, len(subsample_id))
+        )
+        # print(f'Actual patch sample size: {len(subsample_id)}')
+
+        for h, w in subsample_id:
+            class_value = eopatch[class_feature[0]][class_feature[1]][h][w][0]
+
+            # Skip class 0 (= no data)
+            if not class_value:
+                continue
+
+            array_for_dict = [(class_name, class_value)] \
+                + [(f[1], float(eopatch[f[0]][f[1]][h][w])) for f in features]
+
+            if debug:
+                array_for_dict += [('patch_no', patch_id), ('x', w), ('y', h)]
+            sample_dict.append(dict(array_for_dict))
+
+            # Enrichment
+            if class_value in weak_classes:  # TODO check duplicates
+                neighbours = [-3, -2, -1, 0, 1, 2, 3]
+                for x in neighbours:
+                    for y in neighbours:
+                        if x != 0 or y != 0:
+                            h0 = h + x
+                            w0 = w + y
+                            max_h, max_w = height, width
+                            if h0 >= max_h or w0 >= max_w \
+                               or h0 <= 0 or w0 <= 0:
+                                continue
+
+                            val = eopatch[class_feature[0]][class_feature[1]][h0][w0][0]
+                            if val in weak_classes:
+                                array_for_dict = [(class_name, val)] \
+                                    + [(f[1], float(eopatch[f[0]][f[1]][h0][w0])) for f in features]
+                                if debug:
+                                    array_for_dict += [
+                                        ('patch_no', patch_id),
+                                        ('x', w0),
+                                        ('y', h0)
+                                    ]
+                                sample_dict.append(dict(array_for_dict))
+
+    df = pd.DataFrame(sample_dict, columns=columns)
+    df.dropna(axis=0, inplace=True)
+
+    class_dictionary = collections.Counter(df[class_feature[1]])
+    class_count = class_dictionary.most_common()
+    least_common = class_count[-1][1]
+    # print(f'Least common: {least_common}')
+
+    # Balancing
+    replace = False
+    if samples_per_class is not None:
+        least_common = samples_per_class
+        replace = True
+    df_downsampled = pd.DataFrame(columns=columns)
+    names = [name[0] for name in class_count]
+    dfs = [df[df[class_name] == x] for x in names]
+    for d in dfs:
+        nd = resample(
+            d,
+            replace=replace,
+            n_samples=least_common,
+            random_state=seed
+        )
+        # print(f'Actual sample size per class: {len(nd.index)}')
+        df_downsampled = df_downsampled.append(nd)
+
+    if class_frequency:
+        return df_downsampled, class_dictionary
+
+    return df_downsampled
+
+
+def get_patches(path, n=0):
+    """Get selected number of patch IDs from given directory path.
+    If number is not provided, i.e. is zero, all patch IDs are returned.
+
+    :param path: Directory path where patches are
+    :type path: Path
+    :param n: Number of patch IDs to retrieve, defaults to 0
+    :type n: int, optional
+    :return: List of patch IDs
+    :rtype: list[int]
+    """
+    patches = [patch.name for patch in path.glob('eopatch_*')]
+    ids = []
+
+    for patch in patches:
+        match = re.match(r'^eopatch_(\d+)$', patch)
+        if match:
+            ids.append(int(match.group(1)))
+
+    ids.sort()
+    return random.sample(ids, n) if n else ids
 
 
 def sample_data(cfg, log_dir):
@@ -159,70 +228,65 @@ def sample_data(cfg, log_dir):
     processed_data_dir = misc.get_processed_data_dir(cfg)
     input_dir = processed_data_dir / 'patches'
 
-    # Get output directory.
-    sampled_data_dir = misc.get_sampled_data_dir(cfg)
-    output_dir = sampled_data_dir / 'patches'
+    sampl_cfg = cfg['sampling']
 
-    if not output_dir.is_dir():
-        output_dir.mkdir(parents=True)
+    patches = None
+    if isinstance(sampl_cfg['patches'], list):
+        patches = sampl_cfg['patches']
+    else:
+        patches = get_patches(input_dir, sampl_cfg['patches'])
 
-    # Initialize workflow.
-    workflow = init_workflow(
-        cfg,
-        input_dir,
-        output_dir
-    )
+    no_patches = len(patches)
 
-    # Initialize workflow execution arguments.
-    execution_args = init_execution_args(
-        cfg,
-        workflow.get_tasks(),
-        input_dir,
-        output_dir
-    )
-
-    total_executions = len(execution_args)
-
-    if total_executions:
-        # Initialize executor.
-        executor = EOExecutor(
-            workflow,
-            execution_args,
-            save_logs=True,
-            logs_folder=str(log_dir)
-        )
-
-        ex_workers = int(os.getenv('EX_WORKERS'))
-        ex_multiprocess = os.getenv('EX_MULTIPROCESS').lower() == 'true'
-
+    if no_patches:
         log.info(
-            f'Attempting to sample {total_executions} patches from: '
-            f'{input_dir}'
+            f'Attempting to sample {no_patches} patches of class '
+            f'{sampl_cfg["class_feature"]} from: {input_dir}'
         )
 
         # Execute workflow.
         ex_time = time.time()
-        executor.run(
-            workers=ex_workers,
-            multiprocess=ex_multiprocess
+        samples, class_freq = sample_patches(
+            path=input_dir,
+            patches=patches,
+            no_samples=sampl_cfg['no_samples'],
+            class_feature=(
+                FeatureType.MASK_TIMELESS,
+                sampl_cfg['class_feature']
+            ),
+            mask_feature=(FeatureType.MASK_TIMELESS, 'EDGES_INV'),
+            features=[],
+            weak_classes=sampl_cfg['weak_classes'],
+            debug=True,
+            seed=None,
+            class_frequency=True
         )
         ex_time = time.time() - ex_time
 
-        successful_executions = len(executor.get_successful_executions())
+        no_samples = len(samples.index)
         log.info(
-            f'Sampled {successful_executions} / {total_executions} '
-            f'patches in {ex_time:.2f} seconds'
+            f'Sampled {no_patches} patches in {ex_time:.2f} seconds'
         )
-        log.info(f'Results saved: {output_dir}')
+        log.info(f'All samples: {no_samples}')
+        log.info(f'Class frequency: {class_freq}')
 
-        # Report.
-        executor.make_report()
+        # Get output directory.
+        output_dir = misc.get_sampled_data_dir(cfg)
+
+        if not output_dir.is_dir():
+            output_dir.mkdir(parents=True)
+
+        output_file = output_dir / 'samples.csv'
+        samples.to_csv(output_file, index=False)
+
+        log.info(f'Results saved: {output_file}')
     else:
         ex_time = 0.0
-        log.info('All patches already sampled.')
+        log.info('No patches to sample.')
 
     report['sampled_patches'] = {
-        'quantity': total_executions,
+        'quantity': no_patches,
+        'samples': no_samples if no_patches else 0,
         'time': ex_time,
     }
 
@@ -258,6 +322,8 @@ def main(config_name, timestamp):
     try:
         # Load configuration.
         cfg = config.load(config_name, log=log)
+        report['config'] = cfg
+        misc.print_header(cfg, log)
 
         # Sample data.
         sample_data(cfg, log_dir)

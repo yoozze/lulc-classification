@@ -1,8 +1,12 @@
+import concurrent.futures
+import datetime
+import os
+import pickle
 import itertools as it
 
 import cv2
 import numpy as np
-from eolearn.core import EOTask, FeatureType
+from eolearn.core import EOPatch, EOTask, FeatureType
 from eolearn.ml_tools.utilities import rolling_window
 from scipy import ndimage
 
@@ -44,13 +48,14 @@ class TrainTestSplit(EOTask):
 class AddGradientTask(EOTask):
     """The task calculates inclination from DEM and ads it to eopatch.
     """
-    def __init__(self, elevation_feature, result_feature):
+    def __init__(self, elevation_feature, result_feature, sigma=1):
         self.feature = elevation_feature
         self.result_feature = result_feature
+        self.sigma = sigma
 
     def execute(self, eopatch):
         elevation = eopatch[self.feature[0]][self.feature[1]].squeeze()
-        gradient = ndimage.gaussian_gradient_magnitude(elevation, 1)
+        gradient = ndimage.gaussian_gradient_magnitude(elevation, self.sigma)
         eopatch.add_feature(
             self.result_feature[0],
             self.result_feature[1],
@@ -63,13 +68,54 @@ class AddGradientTask(EOTask):
 class CleanMeta(EOTask):
     """The task cleans meta info.
     """
-    def __init__(self, service_type, time_interval):
-        self.service_type = service_type
+    def __init__(self, input_cfg, time_interval):
+        self.input_cfg = input_cfg
         self.time_interval = time_interval
 
     def execute(self, eopatch):
-        eopatch.meta_info['service_type'] = self.service_type
         eopatch.meta_info['time_interval'] = self.time_interval
+
+        cfg = self.input_cfg
+
+        if not cfg:
+            return eopatch
+
+        if 'service_type' in cfg:
+            eopatch.meta_info['service_type'] = cfg['service_type'].lower()
+
+        if 'size_x' in cfg:
+            eopatch.meta_info['size_x'] = cfg['size_x']
+        
+        if 'size_y' in cfg:
+            eopatch.meta_info['size_y'] = cfg['size_y']
+        
+        if 'maxcc' in cfg:
+            eopatch.meta_info['maxcc'] = cfg['maxcc']
+        
+        if 'time_difference' in cfg:
+            eopatch.meta_info['time_difference'] = \
+                datetime.timedelta(seconds=cfg['time_difference'])
+
+        return eopatch
+
+
+class LoadPickle(EOTask):
+    def __init__(self, path):
+        self.path = path
+
+    def execute(self, *, eopatch_file):
+        with open(os.path.join(self.path, eopatch_file), 'rb') as in_file:
+            eopatch = pickle.load(in_file, pickle.HIGHEST_PROTOCOL)
+            return eopatch
+
+
+class SavePickle(EOTask):
+    def __init__(self, path):
+        self.path = path
+
+    def execute(self, eopatch, *, eopatch_file):
+        with open(os.path.join(self.path, eopatch_file), 'wb') as out_file:
+            pickle.dump(eopatch, out_file, pickle.HIGHEST_PROTOCOL)
 
         return eopatch
 
@@ -103,6 +149,10 @@ def temporal_derivative(data, window_size=(3,)):
     padded_slope[1:-1] = slope  # Padding with zeroes at the beginning and end
 
     return normalize_feature(padded_slope)
+
+
+def rgb2gray(rgb):
+    return np.dot(rgb[..., :3], [0.2989, 0.5870, 0.1140])
 
 
 class AddBaseFeatures(EOTask):
@@ -190,6 +240,21 @@ class AddBaseFeatures(EOTask):
                 FeatureType.DATA,
                 'ARVI_SLOPE',
                 ARVI_SLOPE[..., np.newaxis]
+            )
+
+        if 'GRAY' in self.features:
+            img = np.clip(eopatch.data[self.bands_feature][..., [2, 1, 0]] * 3.5, 0, 1)
+            t, w, h, _ = img.shape
+            gray_img = np.zeros((t, w, h))
+            for time in range(t):
+                img0 = np.clip(eopatch[FeatureType.DATA][self.bands_feature][time][..., [2, 1, 0]] * 3.5, 0, 1)
+                img = rgb2gray(img0)
+                gray_img[time] = (img * 255).astype(np.uint8)
+
+            eopatch.add_feature(
+                FeatureType.DATA,
+                'GRAY',
+                gray_img[..., np.newaxis]
             )
 
         return eopatch
@@ -563,27 +628,6 @@ class AddStreamTemporalFeaturesTask(EOTask):
 ###############################################################################
 # Edge extracrtion
 ###############################################################################
-
-
-def rgb2gray(rgb):
-    return np.dot(rgb[..., :3], [0.2989, 0.5870, 0.1140])
-
-
-class AddGray(EOTask):
-    def __init__(self, bands_feature):
-        self.bands_feature = bands_feature
-
-    def execute(self, eopatch):
-        img = np.clip(eopatch.data[self.bands_feature][..., [2, 1, 0]] * 3.5, 0, 1)
-        t, w, h, _ = img.shape
-        gray_img = np.zeros((t, w, h))
-        for time in range(t):
-            img0 = np.clip(eopatch[FeatureType.DATA][self.bands_feature][time][..., [2, 1, 0]] * 3.5, 0, 1)
-            img = rgb2gray(img0)
-            gray_img[time] = (img * 255).astype(np.uint8)
-
-        eopatch.add_feature(FeatureType.DATA, 'GRAY', gray_img[..., np.newaxis])
-        return eopatch
 
 
 class ExtractEdgesTask(EOTask):

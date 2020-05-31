@@ -1,0 +1,459 @@
+// Country: Slovenia
+// Type: LULC
+// Time interval: 2017
+{
+    "name": "LULC - Slovenia",
+    "description": "LULC modelling for entire Slovenia based on Sentinel 2 data for 2017",
+
+    // ===========
+    // Downloading
+    // ===========
+
+    "time_interval": ["2017-01-01", "2017-12-31"],
+    "AOI": {
+        "country": "SVN",
+        "crs": "UTM_33N",
+        "buffer": 0.05,
+        "grid": [50, 34],
+        "regions": []
+        // "regions": [[[25, 17], [25, 17]]]
+        // "regions": [[[25, 17], [25, 17]]]
+    },
+    "sh_inputs": [
+        {
+            "layer": "BANDS-S2-L1C",
+            "feature": "BANDS",
+            "service_type": "WCS",
+            "data_source": "SENTINEL2_L1C",
+            "custom_url_params": {
+                "EVALSCRIPT": "return [B01,B02,B03,B04,B05,B06,B07,B08,B8A,B09,B10,B11,B12]"
+            },
+            "size_x": "10m",
+            "size_y": "10m",
+            "maxcc": 0.8
+            // "time_difference": 7200
+        },
+        {
+            "layer": "DEM",
+            "feature": ["DATA_TIMELESS", "DEM"],
+            "service_type": "WCS",
+            "data_source": "DEM",
+            "custom_url_params": {
+                "EVALSCRIPT": "return [DEM]"
+            },
+            "size_x": "10m",
+            "size_y": "10m"
+        }
+    ],
+    "reference_data": [
+        {
+            "name": "LULC_2020",
+            "url": "http://rkg.gov.si/GERK/documents/RABA_2020_04_30.RAR",
+            "class_column": "RABA_ID",
+            "classes": {
+                // No Data
+                "0": [1600],
+                // Cultivated Land
+                "1": [1100, 1160, 1180, 1190, 1211, 1212, 1221, 1222, 1230, 1240],
+                // Forest
+                "2": [1420, 2000],
+                // Grassland
+                "3": [1300, 1321, 1800],
+                // Shrubland
+                "4": [1410, 1500, 5000],
+                // Water
+                "5": [7000],
+                // Wetlands
+                "6": [4100, 4210, 4220],
+                // Tundra
+                "7": [],
+                // Artificial Surface
+                "8": [3000],
+                // Bareland
+                "9": [6000],
+                // Snow and Ice
+                "10": []
+            }
+        },
+        {
+            "name": "LULC_2017",
+            "url": "http://rkg.gov.si/GERK/documents/RABA_old/Raba_2017.zip",
+            "class_column": "RABA_ID",
+            "classes": {
+                // No Data
+                "0": [1600],
+                // Cultivated Land
+                "1": [1100, 1160, 1180, 1190, 1211, 1212, 1221, 1222, 1230, 1240],
+                // Forest
+                "2": [1420, 2000],
+                // Grassland
+                "3": [1300, 1321, 1800],
+                // Shrubland
+                "4": [1410, 1500, 5000],
+                // Water
+                "5": [7000],
+                // Wetlands
+                "6": [4100, 4210, 4220],
+                // Tundra
+                "7": [],
+                // Artificial Surface
+                "8": [3000],
+                // Bareland
+                "9": [6000],
+                // Snow and Ice
+                "10": []
+            }
+        }
+    ],
+
+    // =============
+    // Preprocessing
+    // =============
+
+    "cloud_detection": {
+        "s2_pixel_cloud_detector": {
+            // "threshold": 0.4,
+            "average_over": 2,
+            "dilation_size": 1,
+            "all_bands": true
+        },
+        "cloud_mask": {
+            "data_feature": "BANDS",
+            "cm_size_x": "80m",
+            "cm_size_y": "80m",
+            "cmask_feature": "CLM",
+            "cprobs_feature": "CLP"
+        }
+    },
+
+    "valid_data": {},
+
+    "filter": {
+        "threshold": 0.8
+    },
+
+    "interpolation": {
+        "copy_features": [
+            ["DATA", "CLP"],
+            ["MASK", "IS_VALID"],
+            ["MASK", "CLM"]
+        ]
+    },
+
+    "features": [
+        // "BLUE",
+        // "GREEN",
+        // "RED",
+        // "NIR",
+        "NDVI",
+        // "NDVI_SLOPE",
+        // "NDWI",
+        // "NDBI",
+        "EVI",
+        // "EVI_SLOPE",
+        // "SAVI",
+        // "SIPI",
+        "ARVI",
+        // "ARVI_SLOPE",
+        "GRAY"
+    ],
+
+    "gradient": {
+        "sigma": 1
+    },
+
+    "edges": {
+        "edge_features": [
+            {
+                "feature_type": "DATA",
+                "feature_name": "EVI",
+                "canny_thresholds": [40, 80],
+                "blur_arguments": [[5, 5], 2]
+            },
+            {
+                "feature_type": "DATA",
+                "feature_name": "ARVI",
+                "canny_thresholds": [40, 80],
+                "blur_arguments": [[5, 5], 2]
+            },
+            {
+                "feature_type": "DATA",
+                "feature_name": "NDVI",
+                "canny_thresholds": [40, 100],
+                "blur_arguments": [[5, 5], 2]
+            },
+            {
+                "feature_type": "DATA",
+                "feature_name": "GRAY",
+                "canny_thresholds": [5, 40],
+                "blur_arguments": [[3, 3], 2]
+            }
+        ],
+        "structuring_element": [
+            [0, 1, 0],
+            [1, 1, 1],
+            [0, 1, 0]
+        ],
+        "dilation_mask": [5, 5],
+        "erosion_mask": [3, 3],
+        "adjust_threshold": 0.05,
+        "yearly_low_threshold": 0.8
+    },
+
+    "raster": {
+        "erosion": true
+    },
+
+    // "preprocess_save": [
+    //     // ["DATA_TIMELESS", "DEM"],
+    //     // ["DATA_TIMELESS", "INCLINATION"],
+    //     // "DATA_TIMELESS",
+    //     "MASK_TIMELESS"
+    // ],
+
+    // ========
+    // Sampling
+    // ========
+    
+    // "sampling": {
+    //     "no_samples": 10000,
+    //     "patches": 0,
+    //     "class_feature": "LULC_2020_G_E",
+    //     "weak_classes": [5, 6, 9]
+    // },
+    "sampling": {
+        "no_samples": 100000,
+        "patches": 0,
+        "class_feature": "LULC_2020_E",
+        "weak_classes": [3, 4, 6, 10, 14, 20, 21, 22]
+    },
+
+    // ==============
+    // Postprocessing
+    // ==============
+
+    "timeless_features": [
+        "BLUE",
+        "GREEN",
+        "RED",
+        "NIR",
+        "NDVI",
+        // "NDVI_SLOPE",
+        "NDWI",
+        // "NDBI",
+        "EVI",
+        // "EVI_SLOPE",
+        "SAVI",
+        "SIPI",
+        "ARVI",
+        // "ARVI_SLOPE",
+    ],
+
+    // =========
+    // Modelling
+    // =========
+    
+    "modelling": {
+        "split": 0.8,
+        "methods": [
+            {
+                "name": "LGBMClassifier",
+                "params": {
+                    "objective": "multiclass",
+                    "metric": "multi_logloss",
+                    "random_state": 42
+                }
+            },
+            // {
+            //     "name": "DecisionTreeClassifier",
+            //     "params": {
+            //         "max_depth": null,
+            //         "min_samples_split": 2,
+            //         "min_samples_leaf": 1,
+            //         "random_state": 42
+            //     }
+            // },
+            // {
+            //     "name": "RandomForestClassifier",
+            //     "params": {
+            //         "n_estimators": 10,
+            //         "max_depth": null,
+            //         "min_samples_split": 2,
+            //         "min_samples_leaf": 1,
+            //         "random_state": 42
+            //     }
+            // },
+            // {
+            //     "name": "LogisticRegression",
+            //     "params": {
+            //         "solver": "lbfgs",
+            //         "multi_class": "multinomial",
+            //         "max_iter": 500
+            //     }
+            // },
+            // {
+            //     "name": "Perceptron",
+            //     "params": {
+            //         "alpha": 1e-5,
+            //         "max_iter": 1000,
+            //         "random_state": 42
+            //     }
+            // },
+            // {
+            //     "name": "MLPClassifier",
+            //     "params": {
+            //         "solver": "adam",
+            //         "alpha": 1e-5,
+            //         "hidden_layer_sizes": [20, 10, 10],
+            //         "max_iter": 500,
+            //         "random_state": 42
+            //     }
+            // },
+            {
+                "name": "stream.HoeffdingTree",
+                "params": {
+                    "max_byte_size": 33554432,
+                    "memory_estimate_period": 1000000,
+                    "grace_period": 200,
+                    "split_confidence": 0.0000001,
+                    "tie_threshold": 0.05,
+                    "binary_splits": false,
+                    "stop_mem_management": false,
+                    "remove_poor_atts": false,
+                    "leaf_learner": "NB",
+                    "bb_threshold": 0,
+                    "tree_property_index_list": "",
+                    "no_pre_prune": false
+                }
+            },
+            // {
+            //     "name": "stream.HoeffdingAdaptiveTree",
+            //     "params": {
+            //         "max_byte_size": 33554432,
+            //         "memory_estimate_period": 1000000,
+            //         "grace_period": 200,
+            //         "split_confidence": 0.0000001,
+            //         "tie_threshold": 0.05,
+            //         "binary_splits": false,
+            //         "stop_mem_management": false,
+            //         "remove_poor_atts": false,
+            //         "leaf_learner": "NB",
+            //         "bb_threshold": 0,
+            //         "tree_property_index_list": "",
+            //         "no_pre_prune": false
+            //     }
+            // },
+            // {
+            //     "name": "stream.Bagging",
+            //     "params": {
+            //         "ensemble_size": 10,
+            //         "learner": {
+            //             "name": "HoeffdingTree",
+            //             "max_byte_size": 33554432,
+            //             "memory_estimate_period": 1000000,
+            //             "grace_period": 200,
+            //             "split_confidence": 0.0000001,
+            //             "tie_threshold": 0.05,
+            //             "binary_splits": false,
+            //             "stop_mem_management": false,
+            //             "remove_poor_atts": false,
+            //             "leaf_learner": "NB",
+            //             "bb_threshold": 0,
+            //             "tree_property_index_list": "",
+            //             "no_pre_prune": false
+            //         }
+            //     }
+            // },
+            // {
+            //     "name": "stream.NaiveBayes",
+            //     "params": {}
+            // },
+            // {
+            //     "name": "stream.LogisticRegression",
+            //     "params": {
+            //         "learning_ratio": 0.01,
+            //         "lambda": 0.0001
+            //     }
+            // },
+            // {
+            //     "name": "stream.Perceptron",
+            //     "params": {
+            //         "learning_ratio": 0.01
+            //     }
+            // },
+            // {
+            //     "name": "stream.MajorityClass",
+            //     "params": {}
+            // }
+        ]
+    },
+
+
+    // =============
+    // Visualization
+    // =============
+
+    "visualization": {
+        "classes": {
+            "0": {
+                "label": "No Data",
+                "color": "#ffffff"
+            },
+            "1": {
+                "label": "Cultivated Land",
+                "color": "#ffa500"
+            },
+            "2": {
+                "label": "Forest",
+                "color": "#054907"
+            },
+            "3": {
+                "label": "Grassland",
+                "color": "#aaff32"
+            },
+            "4": {
+                "label": "Shrubland",
+                "color": "#806000"
+            },
+            "5": {
+                "label": "Water",
+                "color": "#069af3"
+            },
+            "6": {
+                "label": "Wetlands",
+                "color": "#95d0fc"
+            },
+            "7": {
+                "label": "Tundra",
+                "color": "#967bb6"
+            },
+            "8": {
+                "label": "Artificial Surface",
+                "color": "#dc143c"
+            },
+            "9": {
+                "label": "Bareland",
+                "color": "#a6a6a6"
+            },
+            "10": {
+                "label": "Snow and Ice",
+                "color": "#000000"
+            }
+        },
+        "maps": [
+            // {
+            //     "type": "rgb",
+            //     "region": [[25, 17], [28, 20]],
+            //     "date": "2017-06-01"
+            // },
+            // {
+            //     "type": "reference",
+            //     "region": [[25, 17], [28, 20]]
+            // },
+            // {
+            //     "type": "reference_morphed",
+            //     "region": [[25, 17], [28, 20]]
+            // }
+        ]
+    }
+}

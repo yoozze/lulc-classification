@@ -8,9 +8,14 @@ from pathlib import Path
 import click
 import joblib
 import numpy as np
-from lightgbm import LGBMClassifier # noqa
+import pandas as pd
+from lightgbm import LGBMClassifier  # noqa
 from sklearn import metrics
 # from sklearn import preprocessing
+from sklearn.ensemble import RandomForestClassifier  # noqa
+from sklearn.linear_model import LogisticRegression, Perceptron  # noqa
+from sklearn.neural_network import MLPClassifier  # noqa
+from sklearn.tree import DecisionTreeClassifier  # noqa
 # from skmultiflow.trees import HoeffdingTree
 
 import src.lib.streamdm as stream # noqa
@@ -38,6 +43,9 @@ def init_model(cfg, labels_unique):
     # Overwrite default params if neccessary
     if name == 'LGBMClassifier':
         params['num_class'] = len(labels_unique)
+    elif name == 'MLPClassifier':
+        if 'hidden_layer_sizes' in params:
+            params['hidden_layer_sizes'] = tuple(params['hidden_layer_sizes'])
 
     return eval(name)(**params)
 
@@ -53,8 +61,7 @@ def train_models(cfg, log_dir):
     global report
 
     # Get input directory.
-    sampled_data_dir = misc.get_sampled_data_dir(cfg)
-    input_dir = sampled_data_dir / 'patches'
+    input_dir = misc.get_final_data_dir(cfg)
 
     # Get output directory.
     output_dir = misc.get_models_dir(cfg)
@@ -63,16 +70,53 @@ def train_models(cfg, log_dir):
         output_dir.mkdir(parents=True)
 
     # Load train set.
-    log.info(f'Loading train set: {input_dir}')
-    X_test, y_test = misc.load_sample_subset(input_dir, 1)
-    log.info(f'Train set loaded: X{X_test.shape}, y{y_test.shape}')
+    dataset_path = input_dir / 'dataset.csv'
+    train_path = input_dir / 'train.csv'
+    test_path = input_dir / 'test.csv'
 
-    labels_unique = np.unique(y_test)
+    train = None
+    test = None
+
+    if not train_path.is_file():
+        log.info(f'Loading dataset: {dataset_path}')
+        dataset = pd.read_csv(dataset_path)
+
+        log.info('Splitting dataset...')
+        msk = np.random.rand(len(dataset)) < cfg['modelling']['split']
+        train = dataset[msk]
+        test = dataset[~msk]
+
+        log.info(f'Saving train set {train.shape}: {train_path}')
+        train.to_csv(train_path, index=False)
+
+        log.info(f'Saving test set {test.shape}: {test_path}')
+        test.to_csv(test_path, index=False)
+
+        log.info('Splitting complete!')
+    else:
+        log.info(f'Loading train set: {train_path}')
+        train = pd.read_csv(train_path)
+
+    # print(f'Train before: {train.shape}')
+    # train.replace([np.inf, -np.inf], np.nan)
+    # train.dropna(inplace=True)
+    # print(f'Train after: {train.shape}')
+
+    log.info(f'Class name: {train.columns[0]}')
+    log.info(f'Feature names: {train.columns[4:]}')
+
+    X_train = train.iloc[:, 4:].to_numpy()
+    log.info(f'X_train {X_train.shape}: {X_train}')
+
+    y_train = train.iloc[:, 0].to_numpy()
+    log.info(f'y_train {y_train.shape}: {y_train}')
+
+    labels_unique = np.unique(y_train)
 
     models = {}
     report['train_times'] = {}
 
-    for model_cfg in cfg['modelling']:
+    for model_cfg in cfg['modelling']['methods']:
         model_name = model_cfg['name']
 
         try:
@@ -81,7 +125,7 @@ def train_models(cfg, log_dir):
             log.info(f'Training model: {model_name}')
 
             train_time = time.time()
-            model.fit(X_test, y_test)
+            model.fit(X_train, y_train)
             train_time = time.time() - train_time
 
             models[model_name] = model
@@ -108,9 +152,20 @@ def train_models(cfg, log_dir):
     # Evaluate
     # ========
 
-    log.info(f'Loading test set: {input_dir}')
-    X_test, y_test = misc.load_sample_subset(input_dir, 0)
-    log.info(f'Test set loaded: X{X_test.shape}, y{y_test.shape}')
+    if test is None:
+        log.info(f'Loading test set: {test_path}')
+        test = pd.read_csv(test_path)
+
+    # print(f'Test before: {test.shape}')
+    # test.replace([np.inf, -np.inf], np.nan)
+    # test.dropna(inplace=True)
+    # print(f'Test after: {test.shape}')
+
+    X_test = test.iloc[:, 4:].to_numpy()
+    log.info(f'X_test {X_test.shape}: {X_test}')
+
+    y_test = test.iloc[:, 0].to_numpy()
+    log.info(f'y_test {y_test.shape}: {y_test}')
 
     for model_name, model in models.items():
         log.info(f'Evaluating {model_name}:')
@@ -162,6 +217,8 @@ def main(config_name, timestamp):
     try:
         # Load configuration.
         cfg = config.load(config_name, log=log)
+        report['config'] = cfg
+        misc.print_header(cfg, log)
 
         # Train models.
         train_models(cfg, log_dir)

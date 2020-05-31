@@ -6,7 +6,7 @@ import datetime
 import sys
 import time
 from dotenv import find_dotenv, load_dotenv
-# from pathlib import Path
+from pathlib import Path
 
 import click
 import numpy as np
@@ -44,7 +44,7 @@ def save_fig(plot, name):
     log.info(f'Figure saved: {path}')
 
 
-def plot_aoi(cfg):
+def plot_aoi(cfg, patches_dir=None):
     """Visualize AOI.
 
     :param cfg: Configuration.
@@ -62,14 +62,26 @@ def plot_aoi(cfg):
     aoi_grid_x = aoi_cfg['grid'][0]
     aoi_grid_y = aoi_cfg['grid'][1]
 
-    # TODO: Better aproximation with acrual bounding box.
+    # TODO: Better aproximation with actual bounding box.
     ratio = aoi_grid_y / aoi_grid_x
 
     fig, ax = plt.subplots(figsize=(25, 25 * ratio))
     country.plot(ax=ax, facecolor='#eef1f5', edgecolor='#666', alpha=1.0)
-    aoi.plot(ax=ax, facecolor='#eef1f5', edgecolor='#666', alpha=0.4)
+    # aoi.plot(ax=ax, facecolor='#eef1f5', edgecolor='#666', alpha=0.4)
+    aoi.plot(ax=ax, facecolor='#ffffff', edgecolor='#666', alpha=0.4)
     # selected.plot(ax=ax, facecolor='None', edgecolor='#f86a6a', alpha=1.0)
+    # selected.plot(ax=ax, facecolor='#f86a6a', edgecolor='#f86a6a', alpha=0.2)
     selected.plot(ax=ax, facecolor='#f86a6a', edgecolor='#f86a6a', alpha=0.2)
+
+    for idx, row in aoi.iterrows():
+        bbox = row.geometry
+        ax.text(
+            bbox.centroid.x,
+            bbox.centroid.y,
+            idx,
+            ha='center',
+            va='center'
+        )
 
     country_name = country.iloc[0]['name']
     ax.set_title(
@@ -107,15 +119,19 @@ def plot_map(
     :param colorbar: Colorbar settings, optional
     :type colorbar: dict or None, defaults to None
     """
-    log.info(f'Plotting {func.__name__}...')
+    patch_ids = [int(Path(d).name.split('_')[1]) for d in patch_dirs.ravel()]
+    log.info(f'Plotting {func.__name__} of {patch_ids} ...')
 
     region_shape = patch_dirs.shape
     aspect_ratio = 0
 
     fig, axs = plt.subplots(nrows=region_shape[0], ncols=region_shape[1])
 
+    # patch_ids = []
     pbar = tqdm(total=len(patch_dirs))
     for i, patch_dir in enumerate(patch_dirs.ravel()):
+        # patch_ids.append(int(patch_dir.name.split('_')[1]))
+
         # Load each patch separately.
         eopatch = EOPatch.load(patch_dir, lazy_loading=True)
 
@@ -228,7 +244,7 @@ def plot_maps(cfg):
         return
 
     bands = config.get_band_names(cfg, DataSource.SENTINEL2_L1C)
-    s2l1c_cfg = config.get_sh_input_config(cfg, DataSource.SENTINEL2_L1C)
+    feature = config.get_feature_name(cfg, DataSource.SENTINEL2_L1C)
     ref_classes = [int(k) for k in ref_cfg['classes'].keys()]
     ref_labels = [props['label'] for props in vis_cfg['classes'].values()]
     ref_bounds = misc.get_bounds_from_values(ref_classes)
@@ -254,8 +270,7 @@ def plot_maps(cfg):
         # True color map
         if map_cfg['type'] == 'rgb':
             rgb_args = {
-                'feature': s2l1c_cfg['feature'],
-                # 'feature': 'FEATURES',
+                'feature': feature,
                 'bands': bands,
                 'date': map_cfg['date']
             }
@@ -323,6 +338,7 @@ def main(config_name, timestamp):
 
     # Initialize logging.
     log = logging.get_logger(__file__, config_name, timestamp)
+    log_dir = Path(log.handlers[1].baseFilename).parent
 
     # Initialize environment.
     load_dotenv(find_dotenv())
@@ -337,6 +353,8 @@ def main(config_name, timestamp):
     try:
         # Load configuration.
         cfg = config.load(config_name, log=log)
+        report['config'] = cfg
+        misc.print_header(cfg, log)
 
         # Visualize ROI.
         plot_aoi(cfg)
@@ -352,6 +370,7 @@ def main(config_name, timestamp):
     # Save results.
     report['total_time'] = time.time() - total_time
     misc.save_results(report, __file__, config_name, timestamp)
+    log.info(f'Report saved: {log_dir.parent}')
 
     return exit_code
 

@@ -30,6 +30,7 @@ def get_hash(d):
 
 
 def get_raw_data_dir(cfg):
+
     """Get path to hash directory inside of raw data directory. Hash is
     based on given configuration.
 
@@ -39,9 +40,9 @@ def get_raw_data_dir(cfg):
     :rtype: Path
     """
     hash_dir = get_hash([
-        cfg['AOI'],
-        cfg['sh_inputs'],
-        cfg['time_interval']
+        cfg.get('AOI', None),
+        cfg.get('time_interval', None),
+        cfg.get('sh_inputs', None)
     ])
 
     return const.DATA_RAW_DIR / hash_dir
@@ -57,14 +58,19 @@ def get_processed_data_dir(cfg):
     :rtype: Path
     """
     hash_dir = get_hash([
-        cfg['AOI'],
-        cfg['sh_inputs'],
-        cfg['time_interval'],
-        cfg['reference_data'],
-        cfg['cloud_detection'],
-        cfg['features'],
-        # cfg['filtering'],
-        # cfg['interpolation']
+        cfg.get('AOI', None),
+        cfg.get('time_interval', None),
+        cfg.get('sh_inputs', None),
+        cfg.get('reference_data', None),
+        cfg.get('cloud_detection', None),
+        cfg.get('valid_data', None),
+        cfg.get('filter', None),
+        cfg.get('interpolation', None),
+        cfg.get('features', None),
+        cfg.get('gradient', None),
+        cfg.get('edges', None),
+        cfg.get('raster', None),
+        cfg.get('preprocess_save', None),
     ])
 
     return const.DATA_PROCESSED_DIR / hash_dir
@@ -80,18 +86,53 @@ def get_sampled_data_dir(cfg):
     :rtype: Path
     """
     hash_dir = get_hash([
-        cfg['AOI'],
-        cfg['sh_inputs'],
-        cfg['time_interval'],
-        cfg['reference_data'],
-        cfg['cloud_detection'],
-        cfg['features'],
-        # cfg['filtering'],
-        # cfg['interpolation'],
-        cfg['sampling']
+        cfg.get('AOI', None),
+        cfg.get('time_interval', None),
+        cfg.get('sh_inputs', None),
+        cfg.get('reference_data', None),
+        cfg.get('cloud_detection', None),
+        cfg.get('valid_data', None),
+        cfg.get('filter', None),
+        cfg.get('interpolation', None),
+        cfg.get('features', None),
+        cfg.get('gradient', None),
+        cfg.get('edges', None),
+        cfg.get('raster', None),
+        cfg.get('preprocess_save', None),
+        cfg.get('sampling', None),
     ])
 
     return const.DATA_SAMPLED_DIR / hash_dir
+
+
+def get_final_data_dir(cfg):
+    """Get path to hash directory inside of final data directory. Hash is
+    based on given configuration.
+
+    :param cfg: Configuration
+    :type cfg: dict
+    :return: Sampled data directory.
+    :rtype: Path
+    """
+    hash_dir = get_hash([
+        cfg.get('AOI', None),
+        cfg.get('time_interval', None),
+        cfg.get('sh_inputs', None),
+        cfg.get('reference_data', None),
+        cfg.get('cloud_detection', None),
+        cfg.get('valid_data', None),
+        cfg.get('filter', None),
+        cfg.get('interpolation', None),
+        cfg.get('features', None),
+        cfg.get('gradient', None),
+        cfg.get('edges', None),
+        cfg.get('raster', None),
+        cfg.get('preprocess_save', None),
+        cfg.get('sampling', None),
+        cfg.get('timeless_features', None),
+    ])
+
+    return const.DATA_FINAL_DIR / hash_dir
 
 
 def get_models_dir(cfg):
@@ -104,16 +145,22 @@ def get_models_dir(cfg):
     :rtype: Path
     """
     hash_dir = get_hash([
-        cfg['AOI'],
-        cfg['sh_inputs'],
-        cfg['time_interval'],
-        cfg['reference_data'],
-        cfg['cloud_detection'],
-        cfg['features'],
-        # cfg['filtering'],
-        # cfg['interpolation'],
-        cfg['sampling'],
-        cfg['modelling'],
+        cfg.get('AOI', None),
+        cfg.get('time_interval', None),
+        cfg.get('sh_inputs', None),
+        cfg.get('reference_data', None),
+        cfg.get('cloud_detection', None),
+        cfg.get('valid_data', None),
+        cfg.get('filter', None),
+        cfg.get('interpolation', None),
+        cfg.get('features', None),
+        cfg.get('gradient', None),
+        cfg.get('edges', None),
+        cfg.get('raster', None),
+        cfg.get('preprocess_save', None),
+        cfg.get('sampling', None),
+        cfg.get('timeless_features', None),
+        cfg.get('modelling', None),
     ])
 
     return const.MODELS_DIR / hash_dir
@@ -282,13 +329,10 @@ def get_region_paths(cfg, region, data_dir=None):
 
     # Reorder tiles.
     if (rows > 1) and (cols > 1):
-        print('rows and cols')
         paths = np.transpose(np.fliplr(paths))
     elif cols > 1:
-        print('cols')
         paths = np.transpose(paths)
     else:
-        print('rows')
         paths = np.transpose(np.flipud(paths))
 
     return paths
@@ -338,6 +382,53 @@ def get_bounds_from_values(values):
     return bounds
 
 
+def nan_helper(y):
+    """Helper to handle indices and logical indices of NaNs.
+
+    Input:
+        - y, 1d numpy array with possible NaNs
+    Output:
+        - nans, logical indices of NaNs
+        - index, a function, with signature indices= index(logical_indices),
+          to convert logical indices of NaNs to 'equivalent' indices
+    Example:
+        >>> # linear interpolation of NaNs
+        >>> nans, x= nan_helper(y)
+        >>> y[nans]= np.interp(x(nans), x(~nans), y[~nans])
+    """
+    return np.isnan(y), lambda z: z.nonzero()[0]
+
+
+def interpolate_array(y):
+    # If nothing to interpolate, return original.
+    if not np.isnan(y).any():
+        return y
+
+    nan_count = 0
+    y_len = len(y)
+
+    # Check if array is reparable.
+    for i, yi in enumerate(y):
+        if math.isnan():
+            nan_count += 1
+        else:
+            nan_count = 0
+
+        # If more than two nans in a seqquence, don't interpolate.
+        if nan_count > 2:
+            return None
+
+        # If array starts or ends with more than one nans, don't interpolate.
+        if (i == 1 and nan_count == 2) or (i == y_len - 1 and nan_count == 2):
+            return None
+
+    # Interpolate
+    nans, x = nan_helper(y)
+    y[nans] = np.interp(x(nans), x(~nans), y[~nans])
+
+    return y
+
+
 def load_sample_subset(input_dir, subset_id):
     eopatches = []
 
@@ -377,3 +468,11 @@ def load_sample_subset(input_dir, subset_id):
     y = y[~mask]
 
     return X, y
+
+
+def print_header(cfg, log):
+    # print(get_raw_data_dir(cfg))
+    # print(get_processed_data_dir(cfg))
+    # print(get_sampled_data_dir(cfg))
+    # print(get_models_dir(cfg))
+    pass
