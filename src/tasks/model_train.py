@@ -18,7 +18,8 @@ from sklearn.neural_network import MLPClassifier  # noqa
 from sklearn.tree import DecisionTreeClassifier  # noqa
 # from skmultiflow.trees import HoeffdingTree
 
-import src.lib.streamdm as stream # noqa
+import src.lib.mlpack as mlpack # noqa
+import src.lib.streamdm as streamdm # noqa
 from src.utils import config, logging, misc
 
 

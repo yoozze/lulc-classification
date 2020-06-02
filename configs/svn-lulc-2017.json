@@ -215,18 +215,18 @@
     // Sampling
     // ========
     
-    // "sampling": {
-    //     "no_samples": 10000,
-    //     "patches": 0,
-    //     "class_feature": "LULC_2020_G_E",
-    //     "weak_classes": [5, 6, 9]
-    // },
     "sampling": {
-        "no_samples": 100000,
+        "no_samples": 10000,
         "patches": 0,
-        "class_feature": "LULC_2020_E",
-        "weak_classes": [3, 4, 6, 10, 14, 20, 21, 22]
+        "class_feature": "LULC_2020_G_E",
+        "weak_classes": [5, 6, 9]
     },
+    // "sampling": {
+    //     "no_samples": 100000,
+    //     "patches": 0,
+    //     "class_feature": "LULC_2020_E",
+    //     "weak_classes": [3, 4, 6, 10, 14, 20, 21, 22]
+    // },
 
     // ==============
     // Postprocessing
@@ -256,14 +256,14 @@
     "modelling": {
         "split": 0.8,
         "methods": [
-            {
-                "name": "LGBMClassifier",
-                "params": {
-                    "objective": "multiclass",
-                    "metric": "multi_logloss",
-                    "random_state": 42
-                }
-            },
+            // {
+            //     "name": "LGBMClassifier",
+            //     "params": {
+            //         "objective": "multiclass",
+            //         "metric": "multi_logloss",
+            //         "random_state": 42
+            //     }
+            // },
             // {
             //     "name": "DecisionTreeClassifier",
             //     "params": {
@@ -310,7 +310,13 @@
             //     }
             // },
             {
-                "name": "stream.HoeffdingTree",
+                "name": "mlpack.HoeffdingTree",
+                "params": {
+                    "batch_mode": false
+                }
+            },
+            {
+                "name": "streamdm.HoeffdingTree",
                 "params": {
                     "max_byte_size": 33554432,
                     "memory_estimate_period": 1000000,
@@ -327,7 +333,7 @@
                 }
             },
             // {
-            //     "name": "stream.HoeffdingAdaptiveTree",
+            //     "name": "streamdm.HoeffdingAdaptiveTree",
             //     "params": {
             //         "max_byte_size": 33554432,
             //         "memory_estimate_period": 1000000,
@@ -344,7 +350,7 @@
             //     }
             // },
             // {
-            //     "name": "stream.Bagging",
+            //     "name": "streamdm.Bagging",
             //     "params": {
             //         "ensemble_size": 10,
             //         "learner": {
@@ -365,24 +371,24 @@
             //     }
             // },
             // {
-            //     "name": "stream.NaiveBayes",
+            //     "name": "streamdm.NaiveBayes",
             //     "params": {}
             // },
             // {
-            //     "name": "stream.LogisticRegression",
+            //     "name": "streamdm.LogisticRegression",
             //     "params": {
             //         "learning_ratio": 0.01,
             //         "lambda": 0.0001
             //     }
             // },
             // {
-            //     "name": "stream.Perceptron",
+            //     "name": "streamdm.Perceptron",
             //     "params": {
             //         "learning_ratio": 0.01
             //     }
             // },
             // {
-            //     "name": "stream.MajorityClass",
+            //     "name": "streamdm.MajorityClass",
             //     "params": {}
             // }
         ]
